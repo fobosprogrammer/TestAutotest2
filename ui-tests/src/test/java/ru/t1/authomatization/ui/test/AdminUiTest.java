@@ -1,0 +1,222 @@
+package ru.t1.authomatization.ui.test;
+
+import com.codeborne.selenide.Selenide;
+import io.qameta.allure.*;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+
+import ru.t1.authomatization.ui.base.BaseUiTest;
+import ru.t1.authomatization.ui.pageobject.AdminPage;
+import ru.t1.authomatization.ui.pageobject.LoginPage;
+import ru.t1.authomatization.ui.pageobject.MainPage;
+import ru.t1.authomatization.common.ApiConfig;
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * =====================================================================
+ *  AdminUiTest — тесты администрирования SmartShop
+ * =====================================================================
+ *
+ *  Проверяем:
+ *  1. вход в Админку (ссылка «Администрирование» + форма логина);
+ *  2. добавление товара через UI админки и его появление в таблице;
+ *  3. наличие других товаров в таблице (коллекция строк);
+ *  4. изменение цены товара в админке и отражение на главной странице.
+ *
+ *  ГИБРИД API + UI
+ *  ------------------------------------------------
+ *  Там, где удобнее и надёжнее подготовить данные через REST API —
+ *  используем API (см. createProductViaApi в BaseUiTest). Сами
+ *  пользовательские действия выполняются через UI (Page Object).
+ *  Созданные товары удаляются в @AfterEach (BaseUiTest).
+ *
+ *  ПРАВИЛО: ПОСЛЕ КАЖДОГО ДЕЙСТВИЯ ПРОВЕРЯЕМ URL И СОСТОЯНИЕ СТРАНИЦЫ.
+ */
+@Tag("ru/t1/authomatization/ui")
+// =====================================================================
+//  АННОТАЦИИ ALLURE (основные)
+// =====================================================================
+//   @Epic / @Feature / @Story — иерархия отчёта (продукт -> функция -> сценарий);
+//   @Owner                    — кто отвечает за тесты;
+//   @Severity                 — важность теста (задаётся на методе);
+//   @AllureId                 — стабильный id теста;
+//   @Link                     — ссылка на документацию (Swagger).
+@Epic("UI-тесты SmartShop")
+@Feature("Администрирование")
+@Owner("QA-команда SmartShop")
+@Link(name = "Swagger API", url = "http://127.0.0.1:8080/swagger-ui/index.html")
+class AdminUiTest extends BaseUiTest {
+
+    @Test
+    @DisplayName("Вход в Админку: главная -> «Администрирование» -> логин -> /admin")
+    @Severity(SeverityLevel.CRITICAL)
+    @AllureId("UI-201")
+    @Story("Вход в админку")
+    void loginToAdminThroughUi() {
+        MainPage mainPage = new MainPage();
+        mainPage.checkPageDisplayed();
+        checkUrl("/");
+
+        // Шаг 1: клик по «Администрирование».
+        AdminPage adminPage = mainPage
+                .clickAdminLink()
+                .checkPageDisplayed()
+                .loginAs(
+                        ApiConfig.getUsername(),
+                        ApiConfig.getPassword())
+                .checkPageDisplayed();
+
+        assertThat(adminPage.headers().adminTitleElement().text()).isEqualTo("SmartShop Admin");
+    }
+
+    @Test
+    @DisplayName("Добавление товара через админку: товар появляется в таблице")
+    @Severity(SeverityLevel.CRITICAL)
+    @AllureId("UI-202")
+    @Story("Добавление товара через админку")
+    void addProductViaAdminUiShowsInTable() throws InterruptedException {
+        String productName = "My Product 1234567890";
+        double productPrice = 500.1;
+        AdminPage adminPage = new AdminPage().openPage();
+        if (isOnLoginPage()) {
+            adminPage = new LoginPage()
+                    .loginAs(ApiConfig.getUsername(),
+                            ApiConfig.getPassword());
+        }
+        adminPage.checkPageDisplayed();
+        checkUrl("/admin");
+
+        // Запоминаем число строк ДО добавления.
+        int rowsBefore = adminPage.getTableRowCount();
+
+        // Действие: создаём товар через UI админки (поля + «Создать»).
+        String newProductName = uniqueName(productName);
+        adminPage.addProduct(newProductName, productPrice);
+
+        // Проверка 1: количество строк в таблице увеличилось на 1.
+        // (JS перерисовывает таблицу после ответа сервера.)
+        adminPage.checkTableRowCount(rowsBefore + 1);
+
+        // Проверка 2: находим созданный товар в таблице по названию
+        // и проверяем, что его id действительно появился.
+        long newProductId = adminPage.findProductIdByName(newProductName);
+        adminPage.checkProductInTable(newProductId);
+        assertThat(adminPage.getProductPrice(newProductId)).isEqualTo(productPrice);
+
+        // Регистрируем id для очистки в @AfterEach (API-подчистка).
+        createdProductIds.add(newProductId);
+        Thread.sleep(20000);
+    }
+
+    @Test
+    @DisplayName("В таблице админки отображаются другие (ранее созданные) товары")
+    @Severity(SeverityLevel.NORMAL)
+    @AllureId("UI-203")
+    @Story("Содержимое таблицы админки")
+    void adminTableShowsExistingProducts() {
+        // Готовим товар через API — он должен появиться и в админке.
+        long apiProductId = createProductViaApi(uniqueName("Существующий"), 500.0);
+
+        AdminPage adminPage = new AdminPage().openPage();
+        if (isOnLoginPage()) {
+            adminPage = new LoginPage()
+                    .loginAs(ApiConfig.getUsername(),
+                            ApiConfig.getPassword());
+        }
+        adminPage.checkPageDisplayed();
+        checkUrl("/admin");
+
+        // Проверка: товар, созданный через API, виден в таблице админки
+        // и имеет ожидаемую цену.
+        adminPage.checkProductInTable(apiProductId);
+        assertThat(adminPage.getProductPrice(apiProductId)).isEqualTo(500.0);
+
+        // Проверка: коллекция строк не пустая и содержит наш товар.
+        assertThat(adminPage.getTableRowCount()).isGreaterThan(0);
+    }
+
+    @Test
+    @DisplayName("Смена цены в админке отражается на главной странице")
+    @Severity(SeverityLevel.CRITICAL)
+    @AllureId("UI-204")
+    @Story("Редактирование товара")
+    void changePriceInAdminReflectsOnMainPage() {
+        // Готовим товар через API (быстрее) и смотрим на него в UI.
+        String productName = uniqueName("Для-Смены-Цены");
+        long productId = createProductViaApi(productName, 100.0);
+
+        // Входим в админку.
+        AdminPage adminPage = new AdminPage().openPage();
+        if (isOnLoginPage()) {
+            adminPage = new LoginPage()
+                    .loginAs(ApiConfig.getUsername(),
+                            ApiConfig.getPassword());
+        }
+        adminPage.checkPageDisplayed();
+        checkUrl("/admin");
+
+        // Товар есть в таблице с ценой 100.0.
+        adminPage.checkProductInTable(productId);
+        assertThat(adminPage.getProductPrice(productId)).isEqualTo(100.0);
+
+        // Действие: меняем цену в поле #pr-{id} и жмём «Сохранить».
+        double newPrice = 1234.5;
+        adminPage.updateProductPrice(productId, newPrice);
+
+        // Проверка 1: цена в таблице админки обновилась (поле перерисовано).
+        assertThat(adminPage.getProductPrice(productId)).isEqualTo(newPrice);
+
+        // Переходим на главную страницу через ссылку «Вернуться на сайт».
+        adminPage.headers().clickBackToSite();
+        checkUrl("/");
+
+        // Проверка 2: карточка товара на главной странице показывает
+        // НОВУЮ цену (в атрибуте data-price карточки).
+        MainPage mainPage = new MainPage();
+        mainPage.checkPageDisplayed();
+        mainPage.checkProductVisible(productId);
+        assertThat(mainPage.productCard(productId).getDataPrice()).isEqualTo(newPrice);
+
+        // Проверка 3: видимый текст цены в карточке тоже обновился.
+        // В карточке цена выводится в div: "{price} ₽".
+        com.codeborne.selenide.SelenideElement priceDiv =
+                Selenide.$("#card-" + productId + " div[style*='color:var(--primary)']");
+        assertThat(priceDiv.text()).startsWith("1234.5");
+    }
+
+    @Test
+    @DisplayName("Удаление товара через админку убирает его из таблицы")
+    @Severity(SeverityLevel.CRITICAL)
+    @AllureId("UI-205")
+    @Story("Удаление товара")
+    void deleteProductViaAdminUi() {
+        // Создаём товар через API и входим в админку.
+        long productId = createProductViaApi(uniqueName("Удалим-Через-UI"), 900.0);
+
+        AdminPage adminPage = new AdminPage().openPage();
+        if (isOnLoginPage()) {
+            adminPage = new LoginPage()
+                    .loginAs(ApiConfig.getUsername(),
+                            ApiConfig.getPassword());
+        }
+        adminPage.checkPageDisplayed();
+        checkUrl("/admin");
+
+        adminPage.checkProductInTable(productId);
+
+        // Действие: удаляем товар (кнопка «Удалить», confirm() подтвердится
+        // автоматически — Selenide по умолчанию принимает диалоги).
+        adminPage.deleteProduct(productId);
+
+        // Проверка: строка исчезла из таблицы, товара больше нет.
+        adminPage.checkProductAbsent(productId);
+
+        // Проверка через API: товар действительно удалён.
+        // ВНИМАНИЕ: GET удалённого товара на этом сервере может вернуть 500
+        // (известная особенность сервиса), поэтому надёжный признак удаления —
+        // повторный DELETE, который вернёт 404 (товара уже нет).
+        assertThat(goodsApi.deleteProduct(productId).getStatusCode()).isEqualTo(404);
+    }
+
+}

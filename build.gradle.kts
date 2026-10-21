@@ -1,3 +1,4 @@
+import org.gradle.kotlin.dsl.registering
 import java.time.Duration
 
 plugins {
@@ -31,6 +32,7 @@ dependencies {
     testImplementation("io.qameta.allure:allure-rest-assured:2.35.5")
     testImplementation("io.qameta.allure:allure-selenide:2.35.5")
     testImplementation("io.qameta.allure:allure-java-commons:2.35.5")
+    testImplementation("io.qameta.allure:allure-junit5:2.24.0")
 }
 
 allure {
@@ -57,8 +59,16 @@ allure {
     }
 }
 
-tasks.named<io.qameta.allure.gradle.report.tasks.AllureReport>("allureReport") {
-    clean.set(true)
+val aggregateAllureReports by tasks.registering(Copy::class) {
+    ->
+    dependsOn(":api-tests:test", ":ui-tests:test")
+    from("api-tests/build/allure-results")
+    from("ui-tests/build/allure-results")
+    into("build/allure-results")
+}
+
+tasks.named("allureReport") {
+    dependsOn(aggregateAllureReports)
 }
 
 tasks.test {
@@ -88,9 +98,6 @@ tasks.test {
         ))
 }
 
-tasks.named<io.qameta.allure.gradle.report.tasks.AllureReport>("allureReport") {
-    clean.set(true)
-}
 
 // ---------- 5а. REST API-тесты (RestAssured) ----------
 // Тесты на ручки HTTP-сервиса (см. пакет ru.t1.authomatization.api) отбираются по тегу @Tag("api").
